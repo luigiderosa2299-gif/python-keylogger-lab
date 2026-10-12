@@ -9,10 +9,11 @@ Comprendere dall'interno il funzionamento di un keylogger — una delle categori
 Laboratorio personale (vedi [home-lab-cybersecurity](https://github.com/luigiderosa2299-gif/home-lab-cybersecurity)): VM Kali Linux su UTM, rete privata isolata. Il keylogger è stato scritto, eseguito e analizzato esclusivamente all'interno di questo ambiente controllato, con sessione grafica X11 attiva sul display `:0`.
 
 ## 🛠 Tecnologie e Strumenti
-- **Python 3** con libreria [`pynput`](https://pypi.org/project/pynput/) per l'intercettazione degli eventi di tastiera (backend X11 su Linux)
-- **YARA** per la scrittura di una regola di detection basata su firma statica
-- **psutil** per l'ispezione dei processi in esecuzione (detection comportamentale a runtime)
-- Ambiente di test: VM Kali Linux (lab isolato)
+- **Python 3** con libreria [`pynput`](https://pypi.org/project/pynput/) per l'intercettazione degli eventi di tastiera (backend X11 su Linux, Win32 su Windows)
+- **YARA** per la scrittura di regole di detection basate su firma statica (codice sorgente e binario compilato PyInstaller)
+- **psutil** per l'ispezione dei processi in esecuzione (detection comportamentale a runtime, cross-platform)
+- **PyInstaller** per compilare il keylogger in un eseguibile standalone
+- Ambiente di test: VM Kali Linux (sviluppo principale) + VM Windows 11 (verifica cross-platform), entrambe su UTM
 
 ## ⚙️ Cosa ho fatto
 
@@ -27,6 +28,9 @@ Laboratorio personale (vedi [home-lab-cybersecurity](https://github.com/luigider
 9. **Verifica finale**: con il keylogger reale in esecuzione, solo il suo processo viene segnalato (zero falsi positivi); a keylogger fermato, nessun processo viene segnalato.
 10. **Compilazione con PyInstaller** (`pyinstaller --onefile keylogger.py`) per ottenere una versione eseguibile standalone, e analisi di cosa resta visibile nel binario (`strings dist/keylogger`): le frasi di codice sorgente usate dalla prima regola YARA non sono più presenti (il bytecode viene compresso in un archivio interno), ma i nomi dei sottomoduli di `pynput` restano in chiaro nella tabella di import del bootloader.
 11. **Scrittura di una seconda regola YARA** (`Python_Keylogger_PyInstaller_Frozen`) basata su queste stringhe di modulo, per riconoscere anche la versione compilata — verificata con `yara detection/keylogger.yar dist/keylogger`: matcha solo la nuova regola, correttamente non quella basata sul codice sorgente.
+12. **Verifica cross-platform su VM Windows 11**: stesso keylogger (`py keylogger.py`) eseguito con successo anche lì, confermando che `pynput` intercetta correttamente la tastiera anche sul backend Win32, non solo su X11.
+13. **Adattamento di `detect_keylogger.py` per Windows**: il controllo comportamentale sul socket Unix (valido solo su Linux/X11) non ha un equivalente su Windows, dove `pynput` usa gli hook nativi `SetWindowsHookEx` senza alcun socket IPC coinvolto — lo script ora rileva la piattaforma e dichiara onestamente il controllo "non applicabile" lì, invece di fallire.
+14. **Scoperta di un falso positivo specifico di Windows**: il launcher `py.exe` di Windows non si sostituisce al vero interprete come fa una shell Linux, ma lo mantiene come processo figlio separato — risultato, entrambi comparivano in elenco con la stessa command line. Risolto trattando `py.exe` come lanciatore, alla pari di `zsh`/`bash`.
 
 ## 📊 Risultati
 
@@ -98,11 +102,30 @@ Python_Keylogger_PyInstaller_Frozen dist/keylogger
 ```
 Solo la nuova regola matcha il binario compilato; quella basata sul codice sorgente no — conferma che le due forme dello stesso strumento richiedono firme diverse.
 
+**Esecuzione su Windows 11** — `python.exe keylogger.py` avviato con successo, keylogger funzionante identico a Linux.
+
+**Detection comportamentale su Windows, prima del fix** — crash:
+```
+ValueError: invalid kind argument 'unix'; valid ones are ('all', 'tcp', 'tcp4', 'udp', 'inet', 'inet4', 'inet6', 'tcp6', 'udp6')
+```
+
+**Dopo l'adattamento cross-platform**, con `py.exe` ancora da escludere:
+```
+⚠️  Trovati 2 processo/i sospetto/i:
+  PID 2656 (python.exe) — ⚪ non verificabile
+    cmdline: python.exe keylogger.py
+  PID 11860 (py.exe) — ⚪ non verificabile
+    cmdline: py.exe keylogger.py
+```
+
+**Dopo il fix finale** (esclusione di `py.exe` come lanciatore): solo il vero processo `python.exe` viene segnalato, zero falsi positivi anche su Windows.
+
 ## 💡 Cosa ho imparato
 - **Un keylogger "grezzo" non produce testo leggibile**: registra eventi, non significato. Capire questa differenza è fondamentale quando si analizzano log reali in un contesto di incident response — il dato grezzo va sempre interpretato, mai preso alla lettera.
 - **YARA è efficace sul codice sorgente/binario statico**, ma non dice nulla su un processo già in esecuzione: per quello serve un approccio diverso (ispezione dei processi, hook di sistema, telemetria EDR) — da qui la scelta di affiancare alla regola YARA uno script di detection comportamentale separato.
 - **La detection comportamentale ingenua produce falsi positivi**: cercare una singola parola chiave nella command line di un processo non distingue tra "il processo malevolo" e "qualunque cosa menzioni quella parola", incluso lo strumento di detection stesso. Un detector reale (un EDR, una regola SIEM) deve essere molto più specifico — per esempio verificando il comportamento IPC effettivo del processo, non solo il testo della sua riga di comando. Questo è lo stesso principio di "capire la causa prima di fidarsi del risultato" già incontrato nello scan Nmap del progetto home-lab.
 - **Compilare non significa nascondere il codice**: un eseguibile PyInstaller non espone il codice sorgente originale, ma le librerie che bundla lasciano comunque un'impronta (i nomi dei moduli importati) — una firma statica ben progettata deve adattarsi alla forma in cui il malware si presenta, non solo al suo codice sorgente originale.
+- **Un tool cross-platform va testato su ogni piattaforma, non assunto**: lo stesso script di detection si comportava in modo radicalmente diverso tra Linux e Windows — crash totale su uno, un falso positivo nuovo sull'altro (`py.exe` come processo "fantasma" del launcher). Senza testarlo davvero su Windows, entrambi i problemi sarebbero rimasti invisibili fino al primo uso reale.
 
 ## 🔬 Quanto è realistico questo lab? Confronto con implementazioni reali
 

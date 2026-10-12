@@ -33,9 +33,17 @@ OWN_PID = os.getpid()
 SELF_SCRIPT = os.path.basename(__file__)
 SISTEMA = platform.system()  # "Linux", "Windows", "Darwin"
 
-# Nomi di processo che sono solo "lanciatori" (shell): non sono mai loro il
-# processo malevolo, solo il tramite che lo ha avviato.
-NOMI_SHELL = {"zsh", "bash", "sh", "dash", "fish", "powershell", "powershell.exe", "cmd.exe"}
+# Nomi di processo che sono solo "lanciatori" (shell o launcher di un altro
+# interprete): non sono mai loro il processo malevolo, solo il tramite che
+# lo ha avviato. "py.exe" è il launcher Python di Windows: a differenza delle
+# shell Linux non si sostituisce al vero interprete, lo tiene come processo
+# figlio separato — risultato: entrambi finiscono in elenco con la stessa
+# cmdline, se non lo si esclude esplicitamente (scoperto testando su Windows).
+NOMI_SHELL = {
+    "zsh", "bash", "sh", "dash", "fish",
+    "powershell", "powershell.exe", "cmd.exe",
+    "py.exe", "py",
+}
 
 INDICATORI_CMDLINE = ["keylogger.py", "pynput", "keyboard.listener"]
 

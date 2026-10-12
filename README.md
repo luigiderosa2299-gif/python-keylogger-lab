@@ -24,6 +24,8 @@ Laboratorio personale (vedi [home-lab-cybersecurity](https://github.com/luigider
 6. **Verifica della regola YARA** contro il file sorgente reale con il comando `yara detection/keylogger.yar keylogger.py` — match confermato.
 7. **Scrittura dello script di detection comportamentale** (`detection/detect_keylogger.py`) che scansiona i processi in esecuzione cercando indicatori testuali legati al keylogging nella loro command line.
 8. **Test della detection comportamentale** mentre il keylogger era realmente in esecuzione — rilevamento riuscito, ma con **falsi positivi** (lo script ha segnalato anche se stesso e il comando shell di lancio, perché entrambi contenevano la stringa "keylogger").
+9. **Riscrittura di `detect_keylogger.py` (v2)** per eliminare i falsi positivi: esclusione del proprio PID, esclusione delle shell di lancio (zsh/bash/...), esclusione delle altre istanze dello script stesso per nome file. Tentativo iniziale di rafforzare la detection controllando `/proc/<pid>/maps` per vedere se la libreria `pynput` fosse effettivamente caricata in memoria — **vicolo cieco**: i moduli Python puri non vengono mai mappati con `mmap()`, vengono letti con una normale `read()` del bytecode, quindi non appaiono mai in quel file, nemmeno quando sono davvero in uso. Sostituito con un controllo più efficace: un listener X11 deve avere almeno una connessione socket Unix aperta verso il server X, verificabile con `psutil` senza bisogno di permessi root.
+10. **Verifica finale**: con il keylogger reale in esecuzione, solo il suo processo viene segnalato (zero falsi positivi); a keylogger fermato, nessun processo viene segnalato.
 
 ## 📊 Risultati
 
@@ -69,16 +71,37 @@ $ python3 detect_keylogger.py
 
 Il processo reale del keylogger (`keylogger.py`) è stato individuato correttamente, ma insieme a 3 falsi positivi — inclusa la shell che lo aveva lanciato e lo script di detection stesso, perché l'euristica cerca ingenuamente la stringa "keylogger" ovunque nella command line.
 
+**Detection v2, dopo il fix** (stesso scenario, keylogger reale in esecuzione):
+```
+$ python3 detect_keylogger.py
+🔍 Scansione processi in esecuzione per indicatori di keylogging...
+
+⚠️  Trovati 1 processo/i sospetto/i:
+
+  PID 9556 (python3) — 🔴 RAFFORZATO (ha anche un socket IPC aperto, coerente con un listener GUI/X11)
+    indicatori testuali: keylogger.py
+    cmdline: python3 keylogger.py
+```
+Zero falsi positivi, confermato anche a keylogger fermato (nessun processo segnalato). Dettaglio del percorso seguito per arrivarci, incluso un vicolo cieco: sotto "Cosa ho imparato".
+
 ## 💡 Cosa ho imparato
 - **Indentazione, `=` vs `==`, doppio underscore**: errori banali da scrivere ma impossibili da ignorare in Python — il linguaggio non compila proprio finché non sono corretti, il che costringe a un livello di precisione diverso rispetto ad altri linguaggi più permissivi.
 - **Un keylogger "grezzo" non produce testo leggibile**: registra eventi, non significato. Capire questa differenza è fondamentale quando si analizzano log reali in un contesto di incident response — il dato grezzo va sempre interpretato, mai preso alla lettera.
 - **YARA è efficace sul codice sorgente/binario statico**, ma non dice nulla su un processo già in esecuzione: per quello serve un approccio diverso (ispezione dei processi, hook di sistema, telemetria EDR) — da qui la scelta di affiancare alla regola YARA uno script di detection comportamentale separato.
 - **La detection comportamentale ingenua produce falsi positivi**: cercare una singola parola chiave nella command line di un processo non distingue tra "il processo malevolo" e "qualunque cosa menzioni quella parola", incluso lo strumento di detection stesso. Un detector reale (un EDR, una regola SIEM) deve essere molto più specifico — per esempio verificando quali librerie sono effettivamente caricate in memoria dal processo, non solo il testo della sua riga di comando. Questo è lo stesso principio di "capire la causa prima di fidarsi del risultato" già incontrato nello scan Nmap del progetto home-lab.
 
-## 🔜 Prossimi passi
-- [ ] Migliorare `detect_keylogger.py` per ridurre i falsi positivi (es. escludere il proprio PID, verificare le librerie effettivamente caricate invece della sola command line)
-- [ ] Estendere la regola YARA per coprire anche un'eventuale versione compilata (PyInstaller) del keylogger
-- [ ] Script di ricostruzione del testo a partire dal log grezzo (gestione dei BACKSPACE)
+## 🔬 Quanto è realistico questo lab? Confronto con implementazioni reali
+
+**Vs. keylogger didattici pubblici** (es. repo GitHub comuni, tutorial): la struttura di `keylogger.py` è praticamente identica al pattern standard usato da chiunque scriva un keylogger educational con `pynput` — `keyboard.Listener` + funzione `on_press` + `try/except AttributeError` per distinguere tasti normali da tasti speciali + scrittura su file. Non è un'implementazione improvvisata: è lo scheletro canonico per questo scopo.
+
+**Vs. malware reali** (analisi pubbliche di Snake Keylogger, VIP Keylogger, Kimsuky): la differenza è enorme, e voluta. Un keylogger reale aggiunge tipicamente:
+- **Persistenza**: si copia in una cartella nascosta e si registra per partire al boot (registro di Windows, task pianificato, script di logon) — il nostro non lo fa, va lanciato manualmente ogni volta.
+- **Occultamento**: nome file che imita un processo di sistema legittimo, nessun avviso a schermo, a volte process hollowing per nascondersi dentro un processo fidato — il nostro stampa un avviso esplicito ed è un file Python a nome proprio.
+- **Esfiltrazione**: invio dei dati rubati a un server C2 remoto via email (SMTP), Telegram, FTP o HTTP — il nostro scrive solo su un file locale, nessuna rete.
+- **Raccolta aggiuntiva**: furto di credenziali salvate nel browser, screenshot periodici, monitoraggio della clipboard — il nostro registra solo i tasti.
+- **Anti-analisi**: offuscamento del codice, kill switch basati su data, controllo se l'ambiente è una sandbox — il nostro è codice leggibile a chiunque, volutamente.
+
+Questo confronto è il punto didattico centrale del progetto: la parte "difficile" di un vero keylogger non è intercettare i tasti (quella è la parte facile, 10 righe di codice), ma tutto il resto — restare invisibile, resistere al riavvio, e far uscire i dati senza farsi beccare. È anche per questo che le due metà difensive del lab (YARA + detection comportamentale) restano concettualmente valide anche contro varianti più sofisticate: una firma statica e un controllo comportamentale sono esattamente le due categorie di detection che un EDR reale userebbe, solo più elaborate.
 
 ## 🔗 Collegamenti
 - [Home Lab — Cybersecurity Practice Environment](https://github.com/luigiderosa2299-gif/home-lab-cybersecurity)

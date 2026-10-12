@@ -25,15 +25,17 @@ Richiede: psutil (pip install psutil --break-system-packages)
 """
 
 import os
+import platform
 
 import psutil
 
 OWN_PID = os.getpid()
 SELF_SCRIPT = os.path.basename(__file__)
+SISTEMA = platform.system()  # "Linux", "Windows", "Darwin"
 
 # Nomi di processo che sono solo "lanciatori" (shell): non sono mai loro il
 # processo malevolo, solo il tramite che lo ha avviato.
-NOMI_SHELL = {"zsh", "bash", "sh", "dash", "fish"}
+NOMI_SHELL = {"zsh", "bash", "sh", "dash", "fish", "powershell", "powershell.exe", "cmd.exe"}
 
 INDICATORI_CMDLINE = ["keylogger.py", "pynput", "keyboard.listener"]
 
@@ -51,11 +53,23 @@ def ha_connessione_socket_sospetta(pid):
     /tmp/.X11-unix/X0) per ricevere gli eventi di tastiera — e questo si vede
     senza bisogno di permessi root, tramite psutil.
 
+    LIMITE SCOPERTO TESTANDO SU WINDOWS: i socket Unix non esistono su quella
+    piattaforma (psutil solleva ValueError se gli chiedi kind="unix" lì). Non
+    è un bug da correggere: è che pynput usa un backend completamente diverso
+    su Windows (gli hook nativi SetWindowsHookEx), senza alcun socket IPC di
+    mezzo — quindi questo specifico controllo comportamentale non ha proprio
+    un equivalente su quella piattaforma. Per questo il controllo si limita a
+    Linux e su altri sistemi dichiara onestamente "non applicabile", invece
+    di far crashare lo script o fingere un risultato che non ha verificato.
+
     È un segnale comportamentale più solido del solo testo della command
     line (più difficile falsificare "ho una connessione IPC attiva" che
     "il mio script non si chiama keylogger.py"), ma resta un'euristica: un
     qualsiasi programma GUI legittimo apre socket simili. Non è una prova
     definitiva, è un indizio in più da incrociare con quello testuale."""
+    if SISTEMA != "Linux":
+        return None  # controllo non applicabile su questa piattaforma
+
     try:
         proc = psutil.Process(pid)
         try:
@@ -63,7 +77,7 @@ def ha_connessione_socket_sospetta(pid):
         except AttributeError:
             connessioni = proc.connections(kind="unix")  # psutil più vecchie
         return len(connessioni) > 0
-    except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+    except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError, ValueError):
         return None
 
 
@@ -121,7 +135,7 @@ if __name__ == "__main__":
             elif r["socket_ipc_aperto"] is False:
                 badge = "🟡 solo indizio testuale (nessun socket IPC aperto trovato)"
             else:
-                badge = "⚪ non verificabile (permessi insufficienti)"
+                badge = "⚪ non verificabile (permessi insufficienti, o controllo non applicabile su questa piattaforma)"
 
             print(f"  PID {r['pid']} ({r['nome']}) — {badge}")
             print(f"    indicatori testuali: {', '.join(r['indicatori'])}")

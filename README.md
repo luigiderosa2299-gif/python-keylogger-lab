@@ -17,15 +17,16 @@ Laboratorio personale (vedi [home-lab-cybersecurity](https://github.com/luigider
 ## ⚙️ Cosa ho fatto
 
 1. **Progettazione delle regole di design**: solo logging locale su file (`keylog.txt`), nessuna esfiltrazione di rete, nessun meccanismo di persistenza o occultamento del processo, avviso esplicito a schermo quando è in esecuzione.
-2. **Scrittura del keylogger** (`keylogger.py`) in Python con `pynput`: intercetta la pressione dei tasti tramite un listener collegato alla sessione grafica, gestisce sia caratteri normali (`key.char`) sia tasti speciali (SPAZIO, INVIO, BACKSPACE, ESC) tramite gestione delle eccezioni, e si ferma in modo pulito alla pressione di ESC.
-3. **Debug di un primo tentativo**: la prima stesura conteneva cinque errori tipici da principiante — indentazione errata dentro un blocco `except`, un refuso nel nome del modulo (`datetie` invece di `datetime`), una stringa di formato data priva di separatori, una confusione tra l'operatore di assegnazione `=` e quello di confronto `==` in due punti distinti del codice (incluso il blocco `if __name__ == "__main__":` scritto con underscore singoli invece di doppi). Tutti risolti e verificati con `python3 -m py_compile` prima dell'esecuzione.
-4. **Scoperta pratica di una limitazione del logging grezzo**: il keylogger registra i tasti nell'ordine esatto in cui vengono premuti, BACKSPACE incluso come stringa letterale (`Key.backspace`) — non ricostruisce il testo "finale" tenendo conto delle cancellazioni. Per un'analisi forense vera servirebbe un passo successivo di ricostruzione del testo a partire dal log grezzo.
-5. **Scrittura della regola YARA** (`detection/keylogger.yar`) basata sulle stringhe reali presenti nel codice sorgente del keylogger (import di `pynput`, nome del file di log, controllo del tasto ESC, gestione dell'eccezione).
-6. **Verifica della regola YARA** contro il file sorgente reale con il comando `yara detection/keylogger.yar keylogger.py` — match confermato.
-7. **Scrittura dello script di detection comportamentale** (`detection/detect_keylogger.py`) che scansiona i processi in esecuzione cercando indicatori testuali legati al keylogging nella loro command line.
-8. **Test della detection comportamentale** mentre il keylogger era realmente in esecuzione — rilevamento riuscito, ma con **falsi positivi** (lo script ha segnalato anche se stesso e il comando shell di lancio, perché entrambi contenevano la stringa "keylogger").
-9. **Riscrittura di `detect_keylogger.py` (v2)** per eliminare i falsi positivi: esclusione del proprio PID, esclusione delle shell di lancio (zsh/bash/...), esclusione delle altre istanze dello script stesso per nome file. Tentativo iniziale di rafforzare la detection controllando `/proc/<pid>/maps` per vedere se la libreria `pynput` fosse effettivamente caricata in memoria — **vicolo cieco**: i moduli Python puri non vengono mai mappati con `mmap()`, vengono letti con una normale `read()` del bytecode, quindi non appaiono mai in quel file, nemmeno quando sono davvero in uso. Sostituito con un controllo più efficace: un listener X11 deve avere almeno una connessione socket Unix aperta verso il server X, verificabile con `psutil` senza bisogno di permessi root.
-10. **Verifica finale**: con il keylogger reale in esecuzione, solo il suo processo viene segnalato (zero falsi positivi); a keylogger fermato, nessun processo viene segnalato.
+2. **Scrittura del keylogger** (`keylogger.py`) in Python con `pynput`: intercetta la pressione dei tasti tramite un listener collegato alla sessione grafica, gestisce sia caratteri normali (`key.char`) sia tasti speciali (SPAZIO, INVIO, BACKSPACE, ESC) tramite gestione delle eccezioni, e si ferma in modo pulito alla pressione di ESC. Verificato con `python3 -m py_compile` prima dell'esecuzione.
+3. **Scoperta pratica di una limitazione del logging grezzo**: il keylogger registra i tasti nell'ordine esatto in cui vengono premuti, BACKSPACE incluso come stringa letterale (`Key.backspace`) — non ricostruisce il testo "finale" tenendo conto delle cancellazioni. Per un'analisi forense vera servirebbe un passo successivo di ricostruzione del testo a partire dal log grezzo.
+4. **Scrittura della regola YARA** (`detection/keylogger.yar`) basata sulle stringhe reali presenti nel codice sorgente del keylogger (import di `pynput`, nome del file di log, controllo del tasto ESC, gestione dell'eccezione).
+5. **Verifica della regola YARA** contro il file sorgente reale con il comando `yara detection/keylogger.yar keylogger.py` — match confermato.
+6. **Scrittura dello script di detection comportamentale** (`detection/detect_keylogger.py`) che scansiona i processi in esecuzione cercando indicatori testuali legati al keylogging nella loro command line.
+7. **Test della detection comportamentale** mentre il keylogger era realmente in esecuzione — rilevamento riuscito, ma con **falsi positivi**: l'euristica iniziale (basata solo sulla stringa "keylogger" nella command line) segnalava anche la shell di lancio e lo script di detection stesso.
+8. **Riscrittura di `detect_keylogger.py` (v2)** per eliminare i falsi positivi: esclusione del proprio PID, esclusione delle shell di lancio (zsh/bash/...), esclusione delle altre istanze dello script stesso per nome file. Aggiunto anche un controllo comportamentale più solido: un listener X11 deve avere almeno una connessione socket Unix aperta verso il server X, verificabile con `psutil` senza bisogno di permessi root (i moduli Python puri come `pynput` non vengono mai mappati in memoria con `mmap()`, quindi un controllo su `/proc/<pid>/maps` non li rileverebbe).
+9. **Verifica finale**: con il keylogger reale in esecuzione, solo il suo processo viene segnalato (zero falsi positivi); a keylogger fermato, nessun processo viene segnalato.
+10. **Compilazione con PyInstaller** (`pyinstaller --onefile keylogger.py`) per ottenere una versione eseguibile standalone, e analisi di cosa resta visibile nel binario (`strings dist/keylogger`): le frasi di codice sorgente usate dalla prima regola YARA non sono più presenti (il bytecode viene compresso in un archivio interno), ma i nomi dei sottomoduli di `pynput` restano in chiaro nella tabella di import del bootloader.
+11. **Scrittura di una seconda regola YARA** (`Python_Keylogger_PyInstaller_Frozen`) basata su queste stringhe di modulo, per riconoscere anche la versione compilata — verificata con `yara detection/keylogger.yar dist/keylogger`: matcha solo la nuova regola, correttamente non quella basata sul codice sorgente.
 
 ## 📊 Risultati
 
@@ -82,13 +83,26 @@ $ python3 detect_keylogger.py
     indicatori testuali: keylogger.py
     cmdline: python3 keylogger.py
 ```
-Zero falsi positivi, confermato anche a keylogger fermato (nessun processo segnalato). Dettaglio del percorso seguito per arrivarci, incluso un vicolo cieco: sotto "Cosa ho imparato".
+Zero falsi positivi, confermato anche a keylogger fermato (nessun processo segnalato).
+
+**Regola YARA sulla versione compilata PyInstaller**:
+```
+$ yara -s detection/keylogger.yar dist/keylogger
+Python_Keylogger_PyInstaller_Frozen dist/keylogger
+0xaa8f41:$mod_keyboard: pynput.keyboard
+0xaa9067:$mod_mouse: pynput.mouse
+0xaa8eed:$mod_util_xorg: pynput._util.xorg
+0xaa8e9b:$mod_util_win32: pynput._util.win32
+0xaa8e1f:$mod_util_darwin: pynput._util.darwin
+0xaa980b:$script_name: keylogger
+```
+Solo la nuova regola matcha il binario compilato; quella basata sul codice sorgente no — conferma che le due forme dello stesso strumento richiedono firme diverse.
 
 ## 💡 Cosa ho imparato
-- **Indentazione, `=` vs `==`, doppio underscore**: errori banali da scrivere ma impossibili da ignorare in Python — il linguaggio non compila proprio finché non sono corretti, il che costringe a un livello di precisione diverso rispetto ad altri linguaggi più permissivi.
 - **Un keylogger "grezzo" non produce testo leggibile**: registra eventi, non significato. Capire questa differenza è fondamentale quando si analizzano log reali in un contesto di incident response — il dato grezzo va sempre interpretato, mai preso alla lettera.
 - **YARA è efficace sul codice sorgente/binario statico**, ma non dice nulla su un processo già in esecuzione: per quello serve un approccio diverso (ispezione dei processi, hook di sistema, telemetria EDR) — da qui la scelta di affiancare alla regola YARA uno script di detection comportamentale separato.
-- **La detection comportamentale ingenua produce falsi positivi**: cercare una singola parola chiave nella command line di un processo non distingue tra "il processo malevolo" e "qualunque cosa menzioni quella parola", incluso lo strumento di detection stesso. Un detector reale (un EDR, una regola SIEM) deve essere molto più specifico — per esempio verificando quali librerie sono effettivamente caricate in memoria dal processo, non solo il testo della sua riga di comando. Questo è lo stesso principio di "capire la causa prima di fidarsi del risultato" già incontrato nello scan Nmap del progetto home-lab.
+- **La detection comportamentale ingenua produce falsi positivi**: cercare una singola parola chiave nella command line di un processo non distingue tra "il processo malevolo" e "qualunque cosa menzioni quella parola", incluso lo strumento di detection stesso. Un detector reale (un EDR, una regola SIEM) deve essere molto più specifico — per esempio verificando il comportamento IPC effettivo del processo, non solo il testo della sua riga di comando. Questo è lo stesso principio di "capire la causa prima di fidarsi del risultato" già incontrato nello scan Nmap del progetto home-lab.
+- **Compilare non significa nascondere il codice**: un eseguibile PyInstaller non espone il codice sorgente originale, ma le librerie che bundla lasciano comunque un'impronta (i nomi dei moduli importati) — una firma statica ben progettata deve adattarsi alla forma in cui il malware si presenta, non solo al suo codice sorgente originale.
 
 ## 🔬 Quanto è realistico questo lab? Confronto con implementazioni reali
 

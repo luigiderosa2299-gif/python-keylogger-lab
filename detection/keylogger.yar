@@ -25,3 +25,18 @@ rule Python_Keylogger_Educational_PyNPut
     condition:
         3 of ($import_pynput, $listener_call, $log_file_name, $esc_check, $attr_error_catch)
 }
+
+rule Python_Keylogger_PyInstaller_Frozen
+{
+	meta:
+		author  = "Luigi De Rosa"
+	strings:
+		$mod_keyboard ="pynput.keyboard" ascii		
+		$mod_mouse ="pynput.mouse" ascii
+		$mod_util_xorg ="pynput._util.xorg" ascii
+		$mod_util_win32 ="pynput._util.win32" ascii
+		$mod_util_darwin ="pynput._util.darwin" ascii
+		$script_name ="keylogger" ascii
+	condition:
+		4 of ($mod_keyboard, $mod_mouse, $mod_util_xorg, $mod_util_win32, $mod_util_darwin) and $script_name
+}
